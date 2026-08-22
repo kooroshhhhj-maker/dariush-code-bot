@@ -1,5 +1,3 @@
-import os
-from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -9,49 +7,57 @@ from telegram.ext import (
     filters,
 )
 
-load_dotenv()
-
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+from config import BOT_TOKEN
+from ai_client import chat
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "سلام 👋\n"
-        "من داریوش هستم؛ دستیار شخصی شما.\n\n"
-        "فعلاً نسخه آزمایشی من فعال است.\n"
-        "پیامت را بفرست تا باهات گفتگو کنم."
+        "سلام 👋\n\n"
+        "من داریوش هستم، دستیار شخصی شما. 🤖\n\n"
+        "هر چیزی می‌خواهی بنویس."
     )
 
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "دستورات فعلی:\n\n"
-        "/start - شروع کار\n"
-        "/help - راهنما\n"
-        "/image - ساخت تصویر (به‌زودی)\n"
-        "/note - یادداشت (به‌زودی)\n"
-        "/reminder - یادآوری (به‌زودی)"
+        "دستورات داریوش:\n\n"
+        "/start — شروع\n"
+        "/help — راهنما\n"
+        "/image — ساخت تصویر\n"
+        "/note — یادداشت\n"
+        "/reminder — یادآوری"
     )
 
 
-async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+async def chat_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    user_message = update.message.text
 
-    await update.message.reply_text(
-        f"پیامت دریافت شد ✅\n\n{text}\n\n"
-        "🧠 موتور هوش مصنوعی در مرحله بعدی اضافه می‌شود."
-    )
+    try:
+        await update.message.chat.send_action("typing")
+
+        answer = chat(user_message)
+
+        await update.message.reply_text(answer)
+
+    except Exception as error:
+        print(f"AI ERROR: {error}")
+
+        await update.message.reply_text(
+            "متأسفانه فعلاً نتونستم پاسخ بدم. دوباره امتحان کن."
+        )
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
-    print(f"ERROR: {context.error}")
+    print(f"BOT ERROR: {context.error}")
 
 
 def main():
     if not BOT_TOKEN:
-        raise RuntimeError(
-            "BOT_TOKEN در فایل .env تنظیم نشده است."
-        )
+        raise RuntimeError("BOT_TOKEN تنظیم نشده است.")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
 
@@ -61,13 +67,13 @@ def main():
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
-            chat,
+            chat_handler,
         )
     )
 
     app.add_error_handler(error_handler)
 
-    print("Dariush Bot is running...")
+    print("Dariush AI Bot is running...")
 
     app.run_polling()
 
