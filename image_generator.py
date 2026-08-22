@@ -96,3 +96,16 @@ def generate_image(prompt: str) -> Path:
     output_path.write_bytes(image_data)
 
     return output_path
+
+
+def generate_pixel_art(prompt: str) -> Path:
+    pixel_prompt = (
+        "Pixel art artwork, retro pixel art style, "
+        "clear pixelated edges, limited color palette, "
+        "crisp individual pixels, game art aesthetic, "
+        "highly detailed pixel composition. "
+        "Do not make it photorealistic. "
+        + prompt.strip()
+    )
+
+    return generate_image(pixel_prompt)
