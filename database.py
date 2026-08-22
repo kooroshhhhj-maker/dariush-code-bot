@@ -71,6 +71,7 @@ def init_db():
             text TEXT NOT NULL,
             remind_at TEXT NOT NULL,
             completed INTEGER DEFAULT 0,
+            daily INTEGER DEFAULT 0,
             created_at TEXT NOT NULL,
             FOREIGN KEY (user_id) REFERENCES users(user_id)
         );
@@ -81,6 +82,10 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_reminders_due
         ON reminders(remind_at, completed);
         """)
+    
+    # Ensure scheduled-note columns exist for both
+    # existing and newly created databases.
+    ensure_note_schedule_columns()
 
 
 def now_iso():
@@ -177,18 +182,57 @@ def delete_memory(user_id, memory_id):
         return cursor.rowcount > 0
 
 
-def add_note(user_id, content, title=None):
+
+def ensure_note_schedule_columns():
+    with get_connection() as conn:
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(notes)").fetchall()
+        }
+
+        if "scheduled_at" not in columns:
+            conn.execute(
+                "ALTER TABLE notes ADD COLUMN scheduled_at TEXT"
+            )
+
+        if "schedule_enabled" not in columns:
+            conn.execute(
+                "ALTER TABLE notes ADD COLUMN schedule_enabled INTEGER DEFAULT 0"
+            )
+
+
+def add_note(
+    user_id,
+    content,
+    title=None,
+    scheduled_at=None,
+    schedule_enabled=False,
+):
     timestamp = now_iso()
 
     with get_connection() as conn:
         cursor = conn.execute(
             """
             INSERT INTO notes (
-                user_id, title, content, created_at, updated_at
+                user_id,
+                title,
+                content,
+                created_at,
+                updated_at,
+                scheduled_at,
+                schedule_enabled
             )
-            VALUES (?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
-            (user_id, title, content, timestamp, timestamp),
+            (
+                user_id,
+                title,
+                content,
+                timestamp,
+                timestamp,
+                scheduled_at,
+                1 if schedule_enabled else 0,
+            ),
         )
 
         return cursor.lastrowid
@@ -198,7 +242,14 @@ def get_notes(user_id, limit=50):
     with get_connection() as conn:
         return conn.execute(
             """
-            SELECT id, title, content, created_at, updated_at
+            SELECT
+                id,
+                title,
+                content,
+                created_at,
+                updated_at,
+                scheduled_at,
+                schedule_enabled
             FROM notes
             WHERE user_id = ?
             ORDER BY updated_at DESC
@@ -220,6 +271,42 @@ def delete_note(user_id, note_id):
 
         return cursor.rowcount > 0
 
+
+
+def get_due_scheduled_notes():
+    current_time = now_iso()
+
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT
+                id,
+                user_id,
+                content,
+                scheduled_at
+            FROM notes
+            WHERE schedule_enabled = 1
+              AND scheduled_at IS NOT NULL
+              AND scheduled_at <= ?
+            ORDER BY scheduled_at ASC
+            """,
+            (current_time,),
+        ).fetchall()
+
+
+def mark_note_schedule_completed(note_id):
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE notes
+            SET schedule_enabled = 0,
+                updated_at = ?
+            WHERE id = ?
+            """,
+            (now_iso(), note_id),
+        )
+
+        return cursor.rowcount > 0
 
 def add_reminder(user_id, text, remind_at):
     timestamp = now_iso()
@@ -275,3 +362,108 @@ def complete_reminder(reminder_id):
             """,
             (reminder_id,),
         )
+
+
+def get_daily_reminders():
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT id, user_id, text, remind_at
+            FROM reminders
+            WHERE completed = 0
+              AND daily = 1
+            ORDER BY remind_at ASC
+            """
+        ).fetchall()
+
+
+def set_reminder_daily(user_id, reminder_id, enabled):
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE reminders
+            SET daily = ?
+            WHERE id = ? AND user_id = ?
+            """,
+            (1 if enabled else 0, reminder_id, user_id),
+        )
+        return cursor.rowcount > 0
+
+
+def delete_reminder(user_id, reminder_id):
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            DELETE FROM reminders
+            WHERE id = ? AND user_id = ?
+            """,
+            (reminder_id, user_id),
+        )
+        return cursor.rowcount > 0
+
+
+def get_reminder(user_id, reminder_id):
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT id, user_id, text, remind_at, completed, daily
+            FROM reminders
+            WHERE id = ? AND user_id = ?
+            """,
+            (reminder_id, user_id),
+        ).fetchone()
+
+
+def get_due_daily_reminders():
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT id, user_id, text, remind_at, daily
+            FROM reminders
+            WHERE completed = 0
+              AND daily = 1
+              AND remind_at <= ?
+            ORDER BY remind_at ASC
+            """,
+            (now_iso(),),
+        ).fetchall()
+
+
+def update_reminder_time(reminder_id, user_id, remind_at):
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE reminders
+            SET remind_at = ?
+            WHERE id = ?
+              AND user_id = ?
+              AND completed = 0
+            """,
+            (remind_at, reminder_id, user_id),
+        )
+        return cursor.rowcount > 0
+
+
+def advance_daily_reminder(reminder_id, current_remind_at):
+    from datetime import datetime, timedelta
+
+    try:
+        dt = datetime.fromisoformat(current_remind_at)
+    except ValueError:
+        return False
+
+    next_time = dt + timedelta(days=1)
+
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE reminders
+            SET remind_at = ?
+            WHERE id = ?
+              AND daily = 1
+              AND completed = 0
+            """,
+            (next_time.isoformat(), reminder_id),
+        )
+
+    return cursor.rowcount > 0
