@@ -2,14 +2,19 @@ from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
+    CallbackQueryHandler,
     MessageHandler,
+    BusinessConnectionHandler,
     ContextTypes,
     filters,
 )
 
 from config import BOT_TOKEN
 from ai_client import chat
-from image_generator import generate_image
+from image_generator import (
+    generate_image,
+    generate_pixel_art,
+)
 
 from database import (
     init_db,
@@ -18,17 +23,31 @@ from database import (
     get_recent_messages,
     get_notes,
     get_pending_reminders,
+    get_daily_reminders,
+    complete_reminder,
+    advance_daily_reminder,
+    get_due_scheduled_notes,
+    mark_note_schedule_completed,
 )
 
 from handlers.notes import (
     note_command,
     notes_command,
     delete_note_command,
+    notes_callback,
+    handle_note_text,
 )
 
 from handlers.reminders import (
     reminder_command,
     reminders_command,
+    reminders_callback,
+    handle_reminder_text,
+)
+
+from handlers.business import (
+    handle_business_connection,
+    handle_business_message,
 )
 
 
@@ -247,6 +266,117 @@ async def image_prompt_handler(
             )
 
 
+async def pixel_art_prompt_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.message:
+        return
+
+    prompt = (update.message.text or "").strip()
+
+    if not prompt:
+        return
+
+    import asyncio
+
+    status = await update.message.reply_text(
+        "🕹️ Creating Pixel Art."
+    )
+
+    context.user_data["mode"] = None
+
+    stop_animation = asyncio.Event()
+
+    async def animate():
+        frames = [
+            "🕹️ Creating Pixel Art.",
+            "🕹️ Creating Pixel Art..",
+            "🕹️ Creating Pixel Art...",
+            "🎨 Processing pixel style...",
+            "🧱 Building pixel composition...",
+            "⚡ Rendering pixels...",
+            "✨ Almost done...",
+        ]
+
+        index = 0
+
+        while not stop_animation.is_set():
+            try:
+                await status.edit_text(
+                    frames[index % len(frames)]
+                )
+            except Exception:
+                pass
+
+            index += 1
+
+            try:
+                await asyncio.wait_for(
+                    stop_animation.wait(),
+                    timeout=0.8,
+                )
+            except asyncio.TimeoutError:
+                pass
+
+    animation_task = asyncio.create_task(animate())
+
+    try:
+        image_path = await asyncio.to_thread(
+            generate_pixel_art,
+            prompt,
+        )
+
+        stop_animation.set()
+        await animation_task
+
+        try:
+            await status.delete()
+        except Exception:
+            pass
+
+        with open(image_path, "rb") as image_file:
+            try:
+                await update.message.reply_photo(
+                    photo=image_file,
+                    caption="🕹️ Pixel Art created successfully.",
+                    read_timeout=60,
+                    write_timeout=60,
+                    connect_timeout=30,
+                    pool_timeout=30,
+                )
+            except Exception as send_error:
+                print(
+                    f"PIXEL ART TELEGRAM SEND ERROR: "
+                    f"{type(send_error).__name__}: {send_error}"
+                )
+                await update.message.reply_text(
+                    "⚠️ تصویر ساخته شد، اما ارسال آن به تلگرام "
+                    "زمان زیادی برد. دوباره تلاش کنید."
+                )
+
+    except Exception as error:
+        stop_animation.set()
+
+        try:
+            await animation_task
+        except Exception:
+            pass
+
+        print(f"PIXEL ART ERROR: {type(error).__name__}: {error}")
+        import traceback
+        traceback.print_exc()
+
+        try:
+            await status.edit_text(
+                "❌ Pixel Art generation failed. Please try again."
+            )
+        except Exception:
+            await update.message.reply_text(
+                "❌ Pixel Art generation failed. Please try again."
+            )
+
+
 # =========================
 # Menu Actions
 # =========================
@@ -290,11 +420,11 @@ async def menu_handler(
         )
 
     elif text == "🕹️ Pixel Art":
+        context.user_data["mode"] = "pixel_art"
+
         await update.message.reply_text(
-            "🕹️ Pixel Art\n\n"
-            "Send me an image.\n"
-            "The Pixel Art engine will be connected "
-            "to Cloudflare next."
+            "🕹️ Pixel Art mode enabled.\n\n"
+            "Send me your image prompt."
         )
 
     elif text == "👤 User Panel":
@@ -318,6 +448,22 @@ async def chat_handler(
     if not user_message:
         return
 
+    # Notes/Reminders handlers own the message while their
+    # corresponding creation mode is active. Do not let the
+    # generic AI chat handler process the same message.
+    if context.user_data.get("notes_mode") in {
+        "new",
+        "schedule",
+        "time",
+    }:
+        return
+
+    if context.user_data.get("reminders_mode") in {
+        "text",
+        "time",
+    }:
+        return
+
     menu_buttons = {
         "🤖 Dariush AI",
         "📝 Notes",
@@ -334,6 +480,10 @@ async def chat_handler(
 
     if context.user_data.get("mode") == "image":
         await image_prompt_handler(update, context)
+        return
+
+    if context.user_data.get("mode") == "pixel_art":
+        await pixel_art_prompt_handler(update, context)
         return
 
     try:
@@ -386,9 +536,62 @@ async def chat_handler(
         )
 
 
+
+
 # =========================
-# Error Handler
+# Daily Reminder Job
 # =========================
+
+async def daily_reminder_job(context: ContextTypes.DEFAULT_TYPE):
+    reminders = get_due_daily_reminders()
+
+    for reminder in reminders:
+        try:
+            await context.bot.send_message(
+                chat_id=reminder["user_id"],
+                text=(
+                    "🔔 Daily Reminder\n\n"
+                    f"📝 {reminder['text']}"
+                ),
+            )
+
+            advance_daily_reminder(
+                reminder["id"],
+                reminder["remind_at"],
+            )
+
+        except Exception as error:
+            print(
+                f"DAILY REMINDER ERROR: "
+                f"{type(error).__name__}: {error}"
+            )
+
+
+async def scheduled_note_job(
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    notes = get_due_scheduled_notes()
+
+    for note in notes:
+        try:
+            await context.bot.send_message(
+                chat_id=note["user_id"],
+                text=(
+                    "📝 Scheduled Note\n\n"
+                    f"{note['content']}"
+                ),
+            )
+
+            mark_note_schedule_completed(
+                note["id"]
+            )
+
+        except Exception as error:
+            print(
+                f"SCHEDULED NOTE ERROR: "
+                f"{type(error).__name__}: {error}"
+            )
+
 
 async def error_handler(
     update: object,
@@ -415,6 +618,25 @@ def main():
         .build()
     )
 
+    if app.job_queue is None:
+        raise RuntimeError(
+            "JobQueue is unavailable. Install python-telegram-bot[job-queue]."
+        )
+
+    app.job_queue.run_repeating(
+        daily_reminder_job,
+        interval=60,
+        first=10,
+        name="daily_reminders",
+    )
+
+    app.job_queue.run_repeating(
+        scheduled_note_job,
+        interval=60,
+        first=15,
+        name="scheduled_notes",
+    )
+
     app.add_handler(
         CommandHandler("start", start)
     )
@@ -439,6 +661,21 @@ def main():
     )
 
     app.add_handler(
+        CallbackQueryHandler(
+            notes_callback,
+            pattern=r"^notes:",
+        )
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handle_note_text,
+        ),
+        group=0,
+    )
+
+    app.add_handler(
         CommandHandler(
             "reminder",
             reminder_command,
@@ -453,10 +690,43 @@ def main():
     )
 
     app.add_handler(
+        CallbackQueryHandler(
+            reminders_callback,
+            pattern=r"^reminders:",
+        )
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handle_reminder_text,
+        ),
+        group=1,
+    )
+
+    # =========================
+    # Telegram Business
+    # =========================
+    app.add_handler(
+        BusinessConnectionHandler(
+            handle_business_connection,
+        )
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.UpdateType.BUSINESS_MESSAGES,
+            handle_business_message,
+        ),
+        group=2,
+    )
+
+    app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
             chat_handler,
         ),
+        group=2,
     )
 
     app.add_error_handler(error_handler)

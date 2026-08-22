@@ -4,17 +4,15 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
+load_dotenv(dotenv_path=".env", override=True)
 
-load_dotenv(dotenv_path=".env")
-
-
-HF_TOKEN = os.getenv("HUGGINGFACE_API_KEY")
-HF_MODEL = os.getenv(
-    "HUGGINGFACE_MODEL",
-    "Qwen/Qwen3-4B-Instruct-2507",
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
+OPENROUTER_MODEL = os.getenv(
+    "OPENROUTER_MODEL",
+    "stealth/ox-alpha",
 )
 
-API_URL = "https://router.huggingface.co/v1/chat/completions"
+API_URL = "https://openrouter.ai/api/v1/chat/completions"
 
 BASE_DIR = Path(__file__).resolve().parent
 PROMPT_PATH = BASE_DIR / "prompts" / "dariush.txt"
@@ -38,9 +36,10 @@ def chat(
     user_message: str,
     messages=None,
 ) -> str:
-    if not HF_TOKEN:
+
+    if not OPENROUTER_API_KEY:
         raise RuntimeError(
-            "HUGGINGFACE_API_KEY در فایل .env تنظیم نشده است."
+            "OPENROUTER_API_KEY در فایل .env تنظیم نشده است."
         )
 
     if not user_message:
@@ -49,8 +48,10 @@ def chat(
         )
 
     headers = {
-        "Authorization": f"Bearer {HF_TOKEN}",
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
         "Content-Type": "application/json",
+        "HTTP-Referer": "https://openrouter.ai/",
+        "X-Title": "Dariush AI Bot",
     }
 
     conversation = [
@@ -60,7 +61,6 @@ def chat(
         }
     ]
 
-    # تاریخچه مکالمه
     if messages:
         for message in messages:
             role = message.get("role")
@@ -79,9 +79,10 @@ def chat(
                 }
             )
 
-    # اگر پیام فعلی قبلاً در history نبود،
-    # آن را اضافه کن.
-    if not conversation or conversation[-1].get("content") != user_message:
+    if (
+        not conversation
+        or conversation[-1].get("content") != user_message
+    ):
         conversation.append(
             {
                 "role": "user",
@@ -90,9 +91,9 @@ def chat(
         )
 
     payload = {
-        "model": HF_MODEL,
+        "model": OPENROUTER_MODEL,
         "messages": conversation,
-        "max_tokens": 500,
+        "max_tokens": 1000,
         "temperature": 0.7,
     }
 
@@ -100,10 +101,13 @@ def chat(
         API_URL,
         headers=headers,
         json=payload,
-        timeout=60,
+        timeout=120,
     )
 
-    response.raise_for_status()
+    if not response.ok:
+        print("OPENROUTER STATUS:", response.status_code)
+        print("OPENROUTER ERROR:", response.text)
+        response.raise_for_status()
 
     data = response.json()
 
@@ -111,7 +115,7 @@ def chat(
 
     if not choices:
         raise RuntimeError(
-            f"Hugging Face returned no choices: {data}"
+            f"OpenRouter returned no choices: {data}"
         )
 
     message = choices[0].get("message", {})
@@ -119,12 +123,11 @@ def chat(
 
     if not answer:
         raise RuntimeError(
-            f"Hugging Face returned an empty response: {data}"
+            f"OpenRouter returned an empty response: {data}"
         )
 
     answer = answer.strip()
 
-    # تضمین Prefix داریوش
     prefix = "from thisisDariush 🤖:"
 
     if not answer.startswith(prefix):
