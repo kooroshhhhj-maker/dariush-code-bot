@@ -1,8 +1,12 @@
 import os
+from pathlib import Path
+
 import requests
 from dotenv import load_dotenv
 
+
 load_dotenv(dotenv_path=".env")
+
 
 HF_TOKEN = os.getenv("HUGGINGFACE_API_KEY")
 HF_MODEL = os.getenv(
@@ -12,29 +16,36 @@ HF_MODEL = os.getenv(
 
 API_URL = "https://router.huggingface.co/v1/chat/completions"
 
-SYSTEM_PROMPT = """
-تو داریوش هستی؛ یک دستیار شخصی و منشی هوشمند فارسی‌زبان.
-
-وظایف اصلی تو:
-- گفت‌وگوی طبیعی و دوستانه
-- پاسخ دقیق به پرسش‌های کاربر
-- کمک در برنامه‌ریزی
-- مدیریت کارها و یادداشت‌ها
-- کمک در نوشتن و ویرایش متن
-- کمک در تصمیم‌گیری و حل مسئله
-- در آینده مدیریت یادآوری‌ها
-- در آینده ساخت و ویرایش تصویر
-
-با کاربر فارسی صحبت کن، مگر اینکه خودش زبان دیگری استفاده کند.
-پاسخ‌ها واضح، کاربردی و متناسب با سؤال باشند.
-خودت را بی‌دلیل معرفی نکن و پاسخ‌های تکراری نده.
-"""
+BASE_DIR = Path(__file__).resolve().parent
+PROMPT_PATH = BASE_DIR / "prompts" / "dariush.txt"
 
 
-def chat(user_message: str) -> str:
+def load_system_prompt() -> str:
+    if not PROMPT_PATH.exists():
+        raise FileNotFoundError(
+            f"Prompt file not found: {PROMPT_PATH}"
+        )
+
+    return PROMPT_PATH.read_text(
+        encoding="utf-8"
+    ).strip()
+
+
+SYSTEM_PROMPT = load_system_prompt()
+
+
+def chat(
+    user_message: str,
+    messages=None,
+) -> str:
     if not HF_TOKEN:
         raise RuntimeError(
             "HUGGINGFACE_API_KEY در فایل .env تنظیم نشده است."
+        )
+
+    if not user_message:
+        raise ValueError(
+            "پیام کاربر خالی است."
         )
 
     headers = {
@@ -42,18 +53,45 @@ def chat(user_message: str) -> str:
         "Content-Type": "application/json",
     }
 
-    payload = {
-        "model": HF_MODEL,
-        "messages": [
-            {
-                "role": "system",
-                "content": SYSTEM_PROMPT,
-            },
+    conversation = [
+        {
+            "role": "system",
+            "content": SYSTEM_PROMPT,
+        }
+    ]
+
+    # تاریخچه مکالمه
+    if messages:
+        for message in messages:
+            role = message.get("role")
+            content = message.get("content")
+
+            if role not in ("user", "assistant"):
+                continue
+
+            if not content:
+                continue
+
+            conversation.append(
+                {
+                    "role": role,
+                    "content": content,
+                }
+            )
+
+    # اگر پیام فعلی قبلاً در history نبود،
+    # آن را اضافه کن.
+    if not conversation or conversation[-1].get("content") != user_message:
+        conversation.append(
             {
                 "role": "user",
                 "content": user_message,
-            },
-        ],
+            }
+        )
+
+    payload = {
+        "model": HF_MODEL,
+        "messages": conversation,
         "max_tokens": 500,
         "temperature": 0.7,
     }
@@ -69,4 +107,27 @@ def chat(user_message: str) -> str:
 
     data = response.json()
 
-    return data["choices"][0]["message"]["content"].strip()
+    choices = data.get("choices")
+
+    if not choices:
+        raise RuntimeError(
+            f"Hugging Face returned no choices: {data}"
+        )
+
+    message = choices[0].get("message", {})
+    answer = message.get("content")
+
+    if not answer:
+        raise RuntimeError(
+            f"Hugging Face returned an empty response: {data}"
+        )
+
+    answer = answer.strip()
+
+    # تضمین Prefix داریوش
+    prefix = "from thisisDariush 🤖:"
+
+    if not answer.startswith(prefix):
+        answer = f"{prefix} {answer}"
+
+    return answer
