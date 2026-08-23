@@ -1,3 +1,6 @@
+import os
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
 from telegram.ext import (
     ApplicationBuilder,
@@ -605,6 +608,23 @@ async def error_handler(
 # Main
 # =========================
 
+
+class RenderHealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"Dariush AI Bot is running")
+
+    def log_message(self, format, *args):
+        pass
+
+
+def start_render_server():
+    port = int(os.environ.get("PORT", "10000"))
+    server = HTTPServer(("0.0.0.0", port), RenderHealthHandler)
+    server.serve_forever()
+
 def main():
     if not BOT_TOKEN:
         raise RuntimeError(
@@ -612,6 +632,7 @@ def main():
         )
 
     init_db()
+    threading.Thread(target=start_render_server, daemon=True).start()
 
     app = (
         ApplicationBuilder()
