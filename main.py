@@ -24,6 +24,7 @@ from database import (
     get_notes,
     get_pending_reminders,
     get_daily_reminders,
+    get_due_daily_reminders,
     complete_reminder,
     advance_daily_reminder,
     get_due_scheduled_notes,
