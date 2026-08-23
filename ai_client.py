@@ -95,6 +95,7 @@ def chat(
         "messages": conversation,
         "max_tokens": 1000,
         "temperature": 0.7,
+        "reasoning": {"enabled": false},
     }
 
     response = requests.post(
