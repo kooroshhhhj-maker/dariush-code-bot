@@ -601,7 +601,7 @@ async def error_handler(
     update: object,
     context: ContextTypes.DEFAULT_TYPE,
 ):
-    print(f"BOT ERROR: {context.error}")
+    print(f"BOT ERROR: {type(context.error).__name__}: {context.error}")
 
 
 # =========================
