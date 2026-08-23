@@ -1,4 +1,5 @@
 import os
+import asyncio
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
@@ -516,12 +517,63 @@ async def chat_handler(
             for row in history
         ]
 
-        await update.message.chat.send_action("typing")
+        # =========================
+        # Animated Thinking
+        # =========================
 
-        answer = chat(
-            user_message,
-            messages=messages,
+        thinking_message = await update.message.reply_text(
+            "Thinking."
         )
+
+        thinking_running = True
+
+        async def thinking_animation():
+            frames = [
+                "Thinking.",
+                "Thinking..",
+                "Thinking...",
+                "Thinking....",
+                "Thinking.....",
+            ]
+
+            index = 0
+
+            while thinking_running:
+                try:
+                    await thinking_message.edit_text(
+                        frames[index % len(frames)]
+                    )
+                    index += 1
+                    await asyncio.sleep(0.5)
+                except Exception as animation_error:
+                    print(
+                        "THINKING ANIMATION ERROR:",
+                        type(animation_error).__name__,
+                        animation_error,
+                    )
+                    break
+
+        animation_task = asyncio.create_task(
+            thinking_animation()
+        )
+
+        try:
+            # chat() is synchronous, so run it outside
+            # the Telegram event loop.
+            answer = await asyncio.to_thread(
+                chat,
+                user_message,
+                messages=messages,
+            )
+        finally:
+            thinking_running = False
+
+            animation_task.cancel()
+
+            try:
+                await animation_task
+            except asyncio.CancelledError:
+                pass
 
         save_message(
             user_id,
@@ -529,7 +581,7 @@ async def chat_handler(
             answer,
         )
 
-        await update.message.reply_text(answer)
+        await thinking_message.edit_text(answer)
 
     except Exception as error:
         print(f"AI ERROR: {error}")
