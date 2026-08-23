@@ -624,6 +624,10 @@ async def chat_handler(
         await menu_handler(update, context)
         return
 
+    if context.user_data.get("mode") == "post_maker":
+        await post_maker_handler(update, context)
+        return
+
     if context.user_data.get("mode") == "image":
         await image_prompt_handler(update, context)
         return
@@ -932,17 +936,6 @@ def main():
         MessageHandler(
             filters.UpdateType.BUSINESS_MESSAGES,
             handle_business_message,
-        ),
-        group=2,
-    )
-
-    # =========================
-    # Post Maker
-    # =========================
-    app.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            post_maker_handler,
         ),
         group=2,
     )
