@@ -417,11 +417,13 @@ async def menu_handler(
         )
 
     elif text == "📰 Post Maker":
+        context.user_data["mode"] = "post_maker"
         await update.message.reply_text(
-            "📰 Post Maker\n\n"
-            "Send me a forwarded post or message "
-            "and I will turn it into an English "
-            "Telegram post ready for @dariushcode."
+            "📰 Post Maker enabled.\n\n"
+            "Forward me a post or send me its text.\n"
+            "I will turn it into a polished English "
+            "Telegram post ready for @dariushcode.\n\n"
+            "Send /start to leave Post Maker."
         )
 
     elif text == "🕹️ Pixel Art":
@@ -434,6 +436,145 @@ async def menu_handler(
 
     elif text == "👤 User Panel":
         await user_panel(update, context)
+
+
+
+# =========================
+# Post Maker
+# =========================
+
+async def post_maker_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.message or not update.effective_user:
+        return
+
+    message = update.message
+
+    # Do not process the Post Maker menu button itself.
+    if message.text == "📰 Post Maker":
+        return
+
+    # Only process messages while Post Maker mode is active.
+    if context.user_data.get("mode") != "post_maker":
+        return
+
+    # Get content from a normal text message or a forwarded message.
+    source_text = message.text or message.caption or ""
+
+    if not source_text and message.reply_to_message:
+        replied = message.reply_to_message
+        source_text = replied.text or replied.caption or ""
+
+    if not source_text:
+        await message.reply_text(
+            "📰 Post Maker\n\n"
+            "Please send a text or forward a text post/message.\n\n"
+            "I will turn it into a polished English Telegram post "
+            "ready for @dariushcode."
+        )
+        return
+
+    user_id = update.effective_user.id
+
+    upsert_user(
+        user_id,
+        username=update.effective_user.username,
+        first_name=update.effective_user.first_name,
+    )
+
+    save_message(
+        user_id,
+        "user",
+        f"[Post Maker] {source_text}",
+    )
+
+    post_prompt = f"""
+You are the professional content editor for the Telegram channel @dariushcode.
+
+Turn the source content below into a polished English Telegram post.
+
+Requirements:
+- Preserve the important facts and meaning.
+- Rewrite naturally; do not translate word-for-word.
+- Make it concise, engaging, and easy to read on Telegram.
+- Start with a strong, relevant headline.
+- Use short paragraphs.
+- Use emojis only where they improve readability.
+- Add a clear call-to-action only when appropriate.
+- Add 3 to 6 relevant hashtags at the end.
+- Do not mention that you are an AI.
+- Do not explain what you changed.
+- Do not add unsupported facts.
+- Do not put the post inside Markdown code fences.
+- Return ONLY the final post.
+- The post should be ready to copy and publish directly on Telegram.
+
+SOURCE CONTENT:
+{source_text}
+""".strip()
+
+    thinking_message = await message.reply_text("Thinking.")
+
+    thinking_running = True
+
+    async def thinking_animation():
+        frames = [
+            "Thinking.",
+            "Thinking..",
+            "Thinking...",
+            "Thinking....",
+            "Thinking.....",
+        ]
+
+        index = 0
+
+        while thinking_running:
+            try:
+                await thinking_message.edit_text(
+                    frames[index % len(frames)]
+                )
+                index += 1
+                await asyncio.sleep(0.5)
+            except Exception as animation_error:
+                print(
+                    "POST MAKER ANIMATION ERROR:",
+                    type(animation_error).__name__,
+                    animation_error,
+                )
+                break
+
+    animation_task = asyncio.create_task(
+        thinking_animation()
+    )
+
+    try:
+        answer = await asyncio.to_thread(
+            chat,
+            post_prompt,
+            messages=[],
+        )
+
+    finally:
+        thinking_running = False
+
+        animation_task.cancel()
+
+        try:
+            await animation_task
+        except asyncio.CancelledError:
+            pass
+
+    save_message(
+        user_id,
+        "assistant",
+        answer,
+    )
+
+    context.user_data.pop("mode", None)
+
+    await thinking_message.edit_text(answer)
 
 
 # =========================
@@ -791,6 +932,17 @@ def main():
         MessageHandler(
             filters.UpdateType.BUSINESS_MESSAGES,
             handle_business_message,
+        ),
+        group=2,
+    )
+
+    # =========================
+    # Post Maker
+    # =========================
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            post_maker_handler,
         ),
         group=2,
     )
