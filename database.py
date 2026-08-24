@@ -81,11 +81,92 @@ def init_db():
 
         CREATE INDEX IF NOT EXISTS idx_reminders_due
         ON reminders(remind_at, completed);
+
+        CREATE TABLE IF NOT EXISTS business_connections (
+            connection_id TEXT PRIMARY KEY,
+            owner_user_id INTEGER NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_business_connections_owner
+        ON business_connections(owner_user_id);
         """)
     
     # Ensure scheduled-note columns exist for both
     # existing and newly created databases.
     ensure_note_schedule_columns()
+
+
+def save_business_connection(
+    connection_id,
+    owner_user_id,
+    enabled=True,
+):
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO business_connections (
+                connection_id,
+                owner_user_id,
+                enabled,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(connection_id) DO UPDATE SET
+                owner_user_id = excluded.owner_user_id,
+                enabled = excluded.enabled,
+                updated_at = excluded.updated_at
+            """,
+            (
+                str(connection_id),
+                owner_user_id,
+                1 if enabled else 0,
+                now_iso(),
+            ),
+        )
+
+
+def get_business_connection(connection_id):
+    with get_connection() as conn:
+        return conn.execute(
+            """
+            SELECT
+                connection_id,
+                owner_user_id,
+                enabled,
+                updated_at
+            FROM business_connections
+            WHERE connection_id = ?
+            """,
+            (str(connection_id),),
+        ).fetchone()
+
+
+def set_business_auto_reply(connection_id, enabled):
+    with get_connection() as conn:
+        cursor = conn.execute(
+            """
+            UPDATE business_connections
+            SET enabled = ?, updated_at = ?
+            WHERE connection_id = ?
+            """,
+            (
+                1 if enabled else 0,
+                now_iso(),
+                str(connection_id),
+            ),
+        )
+        return cursor.rowcount > 0
+
+
+def get_business_auto_reply(connection_id):
+    row = get_business_connection(connection_id)
+
+    if row is None:
+        return True
+
+    return bool(row["enabled"])
 
 
 def now_iso():

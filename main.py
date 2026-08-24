@@ -2,7 +2,13 @@ import os
 import asyncio
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram import (
+    Update,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -33,6 +39,8 @@ from database import (
     advance_daily_reminder,
     get_due_scheduled_notes,
     mark_note_schedule_completed,
+    get_business_connection,
+    set_business_auto_reply,
 )
 
 from handlers.notes import (
@@ -162,15 +170,196 @@ async def user_panel(
         else "Not set"
     )
 
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                "💼 Business Auto Reply",
+                callback_data="business:panel",
+            )
+        ]
+    ]
+
     await update.message.reply_text(
-        "👤 User Panel\n\n"
-        f"Name: {user.first_name or 'Unknown'}\n"
-        f"Username: {username}\n\n"
-        f"📝 Notes: {len(notes)}\n"
-        f"⏰ Active reminders: {len(reminders)}\n\n"
-        "⚙️ Settings and memory management "
-        "will be added later.",
-        reply_markup=main_keyboard(),
+        "👤 User Panel
+
+"
+        f"Name: {user.first_name or 'Unknown'}
+"
+        f"Username: {username}
+
+"
+        f"📝 Notes: {len(notes)}
+"
+        f"⏰ Active reminders: {len(reminders)}
+
+"
+        "💼 Business Auto Reply
+"
+        "Tap the button below to manage it.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def business_panel_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    query = update.callback_query
+
+    if query is None or query.from_user is None:
+        return
+
+    await query.answer()
+
+    user_id = query.from_user.id
+
+    # Find the Business connection owned by this user.
+    from database import get_connection
+
+    with get_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT connection_id, enabled
+            FROM business_connections
+            WHERE owner_user_id = ?
+            ORDER BY updated_at DESC
+            """,
+            (user_id,),
+        ).fetchall()
+
+    if not rows:
+        await query.edit_message_text(
+            "💼 Business Auto Reply
+
+"
+            "No Telegram Business connection was found for this account yet.
+
+"
+            "Connect the bot to your Telegram Business account first."
+        )
+        return
+
+    # For now the panel controls the most recently active connection.
+    connection_id = rows[0]["connection_id"]
+    enabled = bool(rows[0]["enabled"])
+
+    if enabled:
+        button_text = "🔴 Turn OFF Auto Reply"
+        status = "🟢 ON"
+    else:
+        button_text = "🟢 Turn ON Auto Reply"
+        status = "🔴 OFF"
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                button_text,
+                callback_data=(
+                    "business:off"
+                    if enabled
+                    else "business:on"
+                ),
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🔄 Refresh",
+                callback_data="business:panel",
+            )
+        ],
+    ]
+
+    await query.edit_message_text(
+        "💼 Business Auto Reply
+
+"
+        f"Status: {status}
+
+"
+        "When ON, the bot automatically replies to customers.
+"
+        "Messages sent by the account owner are always ignored.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+    )
+
+
+async def business_toggle_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    query = update.callback_query
+
+    if query is None or query.from_user is None:
+        return
+
+    await query.answer()
+
+    user_id = query.from_user.id
+
+    from database import get_connection
+
+    with get_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT connection_id, enabled
+            FROM business_connections
+            WHERE owner_user_id = ?
+            ORDER BY updated_at DESC
+            LIMIT 1
+            """,
+            (user_id,),
+        ).fetchone()
+
+    if row is None:
+        await query.edit_message_text(
+            "❌ Business connection not found."
+        )
+        return
+
+    connection_id = row["connection_id"]
+    new_enabled = not bool(row["enabled"])
+
+    set_business_auto_reply(
+        connection_id,
+        new_enabled,
+    )
+
+    status = "🟢 ON" if new_enabled else "🔴 OFF"
+
+    button_text = (
+        "🔴 Turn OFF Auto Reply"
+        if new_enabled
+        else "🟢 Turn ON Auto Reply"
+    )
+
+    keyboard = [
+        [
+            InlineKeyboardButton(
+                button_text,
+                callback_data=(
+                    "business:off"
+                    if new_enabled
+                    else "business:on"
+                ),
+            )
+        ],
+        [
+            InlineKeyboardButton(
+                "🔄 Refresh",
+                callback_data="business:panel",
+            )
+        ],
+    ]
+
+    await query.edit_message_text(
+        "💼 Business Auto Reply
+
+"
+        f"Status: {status}
+
+"
+        "Messages from the account owner are always ignored.",
+        reply_markup=InlineKeyboardMarkup(keyboard),
     )
 
 
@@ -931,6 +1120,21 @@ def main():
             handle_business_connection,
         )
     )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            business_panel_callback,
+            pattern=r"^business:panel$",
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            business_toggle_callback,
+            pattern=r"^business:(on|off)$",
+        )
+    )
+
 
     app.add_handler(
         MessageHandler(
