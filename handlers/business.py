@@ -1,4 +1,8 @@
-from telegram import Update
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
 from telegram.ext import ContextTypes
 
 from ai_client import chat
@@ -119,10 +123,23 @@ async def handle_business_message(
 
         print("BUSINESS: AI RESPONSE =", repr(answer))
 
+        # Show Business Auto Reply control directly under the reply.
+        keyboard = InlineKeyboardMarkup(
+            [
+                [
+                    InlineKeyboardButton(
+                        "⚙️ مدیریت پاسخ‌گویی",
+                        callback_data="business:panel",
+                    )
+                ]
+            ]
+        )
+
         sent = await context.bot.send_message(
             chat_id=message.chat_id,
             text=answer,
             business_connection_id=connection_id,
+            reply_markup=keyboard,
         )
 
         print(
