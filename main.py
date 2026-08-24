@@ -180,21 +180,12 @@ async def user_panel(
     ]
 
     await update.message.reply_text(
-        "👤 User Panel
-
-"
-        f"Name: {user.first_name or 'Unknown'}
-"
-        f"Username: {username}
-
-"
-        f"📝 Notes: {len(notes)}
-"
-        f"⏰ Active reminders: {len(reminders)}
-
-"
-        "💼 Business Auto Reply
-"
+        "👤 User Panel\n\n"
+        f"Name: {user.first_name or 'Unknown'}\n"
+        f"Username: {username}\n\n"
+        f"📝 Notes: {len(notes)}\n"
+        f"⏰ Active reminders: {len(reminders)}\n\n"
+        "💼 Business Auto Reply\n"
         "Tap the button below to manage it.",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
@@ -213,7 +204,6 @@ async def business_panel_callback(
 
     user_id = query.from_user.id
 
-    # Find the Business connection owned by this user.
     from database import get_connection
 
     with get_connection() as conn:
@@ -229,17 +219,14 @@ async def business_panel_callback(
 
     if not rows:
         await query.edit_message_text(
-            "💼 Business Auto Reply
-
-"
-            "No Telegram Business connection was found for this account yet.
-
-"
-            "Connect the bot to your Telegram Business account first."
+            "💼 Business Auto Reply\n\n"
+            "No Telegram Business connection was found "
+            "for this account yet.\n\n"
+            "Connect the bot to your Telegram Business "
+            "account first."
         )
         return
 
-    # For now the panel controls the most recently active connection.
     connection_id = rows[0]["connection_id"]
     enabled = bool(rows[0]["enabled"])
 
@@ -270,14 +257,10 @@ async def business_panel_callback(
     ]
 
     await query.edit_message_text(
-        "💼 Business Auto Reply
-
-"
-        f"Status: {status}
-
-"
-        "When ON, the bot automatically replies to customers.
-"
+        "💼 Business Auto Reply\n\n"
+        f"Status: {status}\n\n"
+        "When ON, the bot automatically replies to "
+        "customers.\n"
         "Messages sent by the account owner are always ignored.",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
@@ -352,12 +335,8 @@ async def business_toggle_callback(
     ]
 
     await query.edit_message_text(
-        "💼 Business Auto Reply
-
-"
-        f"Status: {status}
-
-"
+        "💼 Business Auto Reply\n\n"
+        f"Status: {status}\n\n"
         "Messages from the account owner are always ignored.",
         reply_markup=InlineKeyboardMarkup(keyboard),
     )
