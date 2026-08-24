@@ -117,12 +117,24 @@ def extract_answer(data):
 
 
 def add_prefix(answer: str) -> str:
-    prefix = "from thisisDariush 🤖:"
+    prefix = "🤖BOT/:"
 
-    if not answer.startswith(prefix):
-        answer = f"{prefix} {answer}"
+    # Remove old bot prefixes if the AI/provider included one.
+    old_prefixes = (
+        "from thisisDariush 🤖:",
+        "از این‌این‌داریوش 🤖:",
+        "از این داریوش 🤖:",
+        "🤖BOT/:",
+    )
 
-    return answer
+    answer = answer.strip()
+
+    for old_prefix in old_prefixes:
+        if answer.startswith(old_prefix):
+            answer = answer[len(old_prefix):].lstrip()
+            break
+
+    return f"{prefix} {answer}"
 
 
 # =========================
