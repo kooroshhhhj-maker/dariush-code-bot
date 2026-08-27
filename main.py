@@ -987,7 +987,13 @@ class RenderHealthHandler(BaseHTTPRequestHandler):
 
 def start_render_server():
     port = int(os.environ.get("PORT", "10000"))
+
+    print(f"RENDER HEALTH SERVER: starting on port {port}", flush=True)
+
     server = HTTPServer(("0.0.0.0", port), RenderHealthHandler)
+
+    print(f"RENDER HEALTH SERVER: READY on port {port}", flush=True)
+
     server.serve_forever()
 
 def main():
