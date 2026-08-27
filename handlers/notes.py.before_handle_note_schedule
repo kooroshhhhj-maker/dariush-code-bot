@@ -1,0 +1,496 @@
+from datetime import datetime, timedelta
+
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes
+
+from database import (
+    add_note,
+    get_notes,
+    delete_note,
+)
+
+
+# =========================
+# Notes Menu
+# =========================
+
+
+def note_date_menu():
+    from datetime import datetime, timedelta
+
+    today = datetime.now().date()
+
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "📅 Today",
+                callback_data="notes:date:0",
+            ),
+            InlineKeyboardButton(
+                "📅 Tomorrow",
+                callback_data="notes:date:1",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "📅 +2 Days",
+                callback_data="notes:date:2",
+            ),
+            InlineKeyboardButton(
+                "📅 +3 Days",
+                callback_data="notes:date:3",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "❌ Cancel",
+                callback_data="notes:cancel",
+            ),
+        ],
+    ])
+
+
+def note_time_menu():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("08:00", callback_data="notes:time:08:00"),
+            InlineKeyboardButton("10:00", callback_data="notes:time:10:00"),
+            InlineKeyboardButton("12:00", callback_data="notes:time:12:00"),
+        ],
+        [
+            InlineKeyboardButton("14:00", callback_data="notes:time:14:00"),
+            InlineKeyboardButton("16:00", callback_data="notes:time:16:00"),
+            InlineKeyboardButton("18:00", callback_data="notes:time:18:00"),
+        ],
+        [
+            InlineKeyboardButton("20:00", callback_data="notes:time:20:00"),
+            InlineKeyboardButton("22:00", callback_data="notes:time:22:00"),
+        ],
+        [
+            InlineKeyboardButton(
+                "❌ Cancel",
+                callback_data="notes:cancel",
+            ),
+        ],
+    ])
+
+
+def notes_menu():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "📋 My Notes",
+                callback_data="notes:list",
+            ),
+            InlineKeyboardButton(
+                "➕ New Note",
+                callback_data="notes:new",
+            ),
+        ]
+    ])
+
+
+def note_actions(note_id):
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "🗑️ Delete",
+                callback_data=f"notes:delete:{note_id}",
+            ),
+        ]
+    ])
+
+
+# =========================
+# Schedule Menus
+# =========================
+
+def note_schedule_menu():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "❌ No Reminder",
+                callback_data="notes:schedule:none",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "📅 Today",
+                callback_data="notes:date:0",
+            ),
+            InlineKeyboardButton(
+                "📅 Tomorrow",
+                callback_data="notes:date:1",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "📅 Day After Tomorrow",
+                callback_data="notes:date:2",
+            ),
+        ],
+        [
+            InlineKeyboardButton(
+                "❌ Cancel",
+                callback_data="notes:cancel",
+            ),
+        ],
+    ])
+
+
+def note_time_menu():
+    times = [
+        "08:00",
+        "10:00",
+        "12:00",
+        "14:00",
+        "16:00",
+        "18:00",
+        "20:00",
+        "22:00",
+    ]
+
+    keyboard = []
+
+    for i in range(0, len(times), 2):
+        keyboard.append([
+            InlineKeyboardButton(
+                times[i],
+                callback_data=f"notes:time:{times[i]}",
+            ),
+            InlineKeyboardButton(
+                times[i + 1],
+                callback_data=f"notes:time:{times[i + 1]}",
+            ),
+        ])
+
+    keyboard.append([
+        InlineKeyboardButton(
+            "❌ Cancel",
+            callback_data="notes:cancel",
+        ),
+    ])
+
+    return InlineKeyboardMarkup(keyboard)
+
+
+# =========================
+# /note
+# =========================
+
+async def note_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.effective_user or not update.message:
+        return
+
+    user_id = update.effective_user.id
+    text = update.message.text or ""
+    content = text.partition(" ")[2].strip()
+
+    if not content:
+        await update.message.reply_text(
+            "📝 Send your note after /note.\n\n"
+            "Example:\n"
+            "/note Study Biology"
+        )
+        return
+
+    note_id = add_note(user_id, content)
+
+    await update.message.reply_text(
+        f"📝 Note saved successfully.\n"
+        f"ID: {note_id}",
+        reply_markup=notes_menu(),
+    )
+
+
+# =========================
+# Notes command
+# =========================
+
+async def notes_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.effective_user or not update.message:
+        return
+
+    await update.message.reply_text(
+        "📝 Notes",
+        reply_markup=notes_menu(),
+    )
+
+
+# =========================
+# Notes callbacks
+# =========================
+
+async def notes_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    query = update.callback_query
+
+    if not query or not update.effective_user:
+        return
+
+    await query.answer()
+
+    user_id = update.effective_user.id
+    action = query.data or ""
+
+    # -------------------------
+    # List notes
+    # -------------------------
+
+    if action == "notes:list":
+        notes = get_notes(user_id)
+
+        if not notes:
+            await query.edit_message_text(
+                "📝 You do not have any notes yet.",
+                reply_markup=notes_menu(),
+            )
+            return
+
+        await query.edit_message_text(
+            "📝 Your Notes:"
+        )
+
+        for note in notes:
+            title = note["title"] or "Untitled"
+
+            schedule = ""
+
+            if note["schedule_enabled"] and note["scheduled_at"]:
+                schedule = (
+                    f"\n⏰ Reminder: {note['scheduled_at']}"
+                )
+
+            await query.message.reply_text(
+                f"#{note['id']} — {title}\n\n"
+                f"{note['content']}"
+                f"{schedule}",
+                reply_markup=note_actions(note["id"]),
+            )
+
+        return
+
+    # -------------------------
+    # New note
+    # -------------------------
+
+    if action == "notes:new":
+        context.user_data["notes_mode"] = "new"
+
+        await query.edit_message_text(
+            "➕ New Note\n\n"
+            "Send the note text now.\n\n"
+            "Example:\n"
+            "Study Biology"
+        )
+        return
+
+    # -------------------------
+    # No reminder
+    # -------------------------
+
+    if action == "notes:schedule:none":
+        content = context.user_data.get("note_content")
+
+        if not content:
+            await query.answer(
+                "Note data is missing.",
+                show_alert=True,
+            )
+            return
+
+        note_id = add_note(
+            user_id,
+            content,
+            scheduled_at=None,
+            schedule_enabled=False,
+        )
+
+        context.user_data.pop("note_content", None)
+        context.user_data["notes_mode"] = None
+
+        await query.edit_message_text(
+            "✅ Note saved.\n\n"
+            f"📝 {content}\n"
+            "⏰ No reminder",
+            reply_markup=notes_menu(),
+        )
+        return
+
+    # -------------------------
+    # Select date
+    # -------------------------
+
+    if action.startswith("notes:date:"):
+        try:
+            days = int(action.split(":")[-1])
+        except ValueError:
+            await query.answer(
+                "Invalid date.",
+                show_alert=True,
+            )
+            return
+
+        content = context.user_data.get("note_content")
+
+        if not content:
+            await query.answer(
+                "Note data is missing.",
+                show_alert=True,
+            )
+            return
+
+        selected_date = (
+            datetime.now().date()
+            + timedelta(days=days)
+        )
+
+        context.user_data["note_date"] = (
+            selected_date.isoformat()
+        )
+
+        context.user_data["notes_mode"] = "time"
+
+        await query.edit_message_text(
+            f"📅 Date selected: "
+            f"{selected_date.strftime('%Y-%m-%d')}\n\n"
+            "⏰ Choose a time:",
+            reply_markup=note_time_menu(),
+        )
+        return
+
+    # -------------------------
+    # Select time
+    # -------------------------
+
+    if action.startswith("notes:time:"):
+        time_value = action.split(":", 2)[-1]
+
+        content = context.user_data.get("note_content")
+        note_date = context.user_data.get("note_date")
+
+        if not content or not note_date:
+            await query.answer(
+                "Note data is missing.",
+                show_alert=True,
+            )
+            return
+
+        scheduled_at = (
+            f"{note_date}T{time_value}:00"
+        )
+
+        note_id = add_note(
+            user_id,
+            content,
+            scheduled_at=scheduled_at,
+            schedule_enabled=True,
+        )
+
+        context.user_data.pop("note_content", None)
+        context.user_data.pop("note_date", None)
+        context.user_data["notes_mode"] = None
+
+        await query.edit_message_text(
+            "✅ Note saved.\n\n"
+            f"📝 {content}\n"
+            f"⏰ {scheduled_at}",
+            reply_markup=notes_menu(),
+        )
+        return
+
+    # -------------------------
+    # Delete
+    # -------------------------
+
+    if action.startswith("notes:delete:"):
+        try:
+            note_id = int(
+                action.split(":")[-1]
+            )
+        except ValueError:
+            await query.answer(
+                "Invalid note.",
+                show_alert=True,
+            )
+            return
+
+        deleted = delete_note(
+            user_id,
+            note_id,
+        )
+
+        if deleted:
+            await query.edit_message_text(
+                "🗑️ Note deleted.",
+                reply_markup=notes_menu(),
+            )
+        else:
+            await query.answer(
+                "Note not found.",
+                show_alert=True,
+            )
+
+        return
+
+    # -------------------------
+    # Cancel
+    # -------------------------
+
+    if action == "notes:cancel":
+        context.user_data.pop("note_content", None)
+        context.user_data.pop("note_date", None)
+        context.user_data["notes_mode"] = None
+
+        await query.edit_message_text(
+            "❌ Note creation cancelled.",
+            reply_markup=notes_menu(),
+        )
+
+        return
+
+
+# =========================
+# Text handler
+# =========================
+
+async def handle_note_text(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.message or not update.effective_user:
+        return False
+
+    mode = context.user_data.get("notes_mode")
+
+    if mode != "new":
+        return False
+
+    content = (
+        update.message.text or ""
+    ).strip()
+
+    if not content:
+        await update.message.reply_text(
+            "Please send a non-empty note."
+        )
+        return True
+
+    context.user_data["note_content"] = content
+    context.user_data["notes_mode"] = "schedule"
+
+    await update.message.reply_text(
+        "📝 Note received.\n\n"
+        "⏰ Do you want a reminder for this note?",
+        reply_markup=note_schedule_menu(),
+    )
+
+    return True

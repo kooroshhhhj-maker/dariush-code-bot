@@ -1,0 +1,319 @@
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
+
+from config import BOT_TOKEN
+from ai_client import chat
+
+from database import (
+    init_db,
+    upsert_user,
+    save_message,
+    get_recent_messages,
+)
+
+from handlers.notes import (
+    note_command,
+    notes_command,
+    delete_note_command,
+)
+
+from handlers.reminders import (
+    reminder_command,
+    reminders_command,
+)
+
+
+# =========================
+# Main Menu
+# =========================
+
+def main_menu():
+    keyboard = [
+        [
+            InlineKeyboardButton("🤖 Dariush AI", callback_data="chat"),
+        ],
+        [
+            InlineKeyboardButton("📝 Notes", callback_data="notes"),
+            InlineKeyboardButton("⏰ Reminders", callback_data="reminders"),
+        ],
+        [
+            InlineKeyboardButton("📰 Post Maker", callback_data="post_maker"),
+        ],
+        [
+            InlineKeyboardButton("🎨 Create Image", callback_data="image"),
+            InlineKeyboardButton("🕹️ Pixel Art", callback_data="pixel_art"),
+        ],
+        [
+            InlineKeyboardButton("⚙️ Settings", callback_data="settings"),
+        ],
+    ]
+
+    return InlineKeyboardMarkup(keyboard)
+
+
+# =========================
+# /start
+# =========================
+
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.effective_user or not update.message:
+        return
+
+    user = update.effective_user
+
+    upsert_user(
+        user.id,
+        username=user.username,
+        first_name=user.first_name,
+    )
+
+    await update.message.reply_text(
+        "سلام 👋\n\n"
+        "من داریوش هستم، دستیار شخصی و منشی هوشمند شما. 🤖\n\n"
+        "از منوی زیر انتخاب کن یا مستقیماً برام پیام بفرست.",
+        reply_markup=main_menu(),
+    )
+
+
+# =========================
+# /help
+# =========================
+
+async def help_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    await update.message.reply_text(
+        "🤖 راهنمای داریوش\n\n"
+        "/start — منوی اصلی\n"
+        "/help — راهنما\n"
+        "/note — ذخیره یادداشت\n"
+        "/notes — نمایش یادداشت‌ها\n"
+        "/delete_note — حذف یادداشت\n"
+        "/reminder — ساخت یادآوری\n"
+        "/reminders — نمایش یادآوری‌ها"
+    )
+
+
+# =========================
+# Button Handler
+# =========================
+
+async def button_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    query = update.callback_query
+
+    if not query:
+        return
+
+    await query.answer()
+
+    if query.data == "chat":
+        await query.message.reply_text(
+            "🤖 حالت چت فعال است.\n\n"
+            "پیامت را بفرست."
+        )
+
+    elif query.data == "notes":
+        await notes_command(update, context)
+
+    elif query.data == "reminders":
+        await reminders_command(update, context)
+
+    elif query.data == "post_maker":
+        await query.message.reply_text(
+            "📰 Post Maker\n\n"
+            "این بخش برای تبدیل پست‌های Forward شده "
+            "به پست آماده انتشار در @dariushcode است.\n\n"
+            "بخش تولید پست را در مرحله بعد وصل می‌کنیم."
+        )
+
+    elif query.data == "image":
+        await query.message.reply_text(
+            "🎨 Create Image\n\n"
+            "بخش ساخت تصویر آماده اتصال به Cloudflare Workers AI است."
+        )
+
+    elif query.data == "pixel_art":
+        await query.message.reply_text(
+            "🕹️ Pixel Art\n\n"
+            "تصویرت را بفرست تا در مرحله بعد "
+            "پردازش Pixel Art را به Cloudflare وصل کنیم."
+        )
+
+    elif query.data == "settings":
+        await query.message.reply_text(
+            "⚙️ Settings\n\n"
+            "بخش تنظیمات داریوش را در مرحله بعد اضافه می‌کنیم."
+        )
+
+
+# =========================
+# Chat Handler
+# =========================
+
+async def chat_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.message or not update.effective_user:
+        return
+
+    user_id = update.effective_user.id
+    user_message = update.message.text
+
+    if not user_message:
+        return
+
+    try:
+        upsert_user(
+            user_id,
+            username=update.effective_user.username,
+            first_name=update.effective_user.first_name,
+        )
+
+        save_message(
+            user_id,
+            "user",
+            user_message,
+        )
+
+        history = get_recent_messages(
+            user_id,
+            limit=20,
+        )
+
+        messages = [
+            {
+                "role": row["role"],
+                "content": row["content"],
+            }
+            for row in history
+        ]
+
+        await update.message.chat.send_action("typing")
+
+        answer = chat(
+            user_message,
+            messages=messages,
+        )
+
+        save_message(
+            user_id,
+            "assistant",
+            answer,
+        )
+
+        await update.message.reply_text(answer)
+
+    except Exception as error:
+        print(f"AI ERROR: {error}")
+
+        await update.message.reply_text(
+            "متأسفانه فعلاً نتونستم پاسخ بدم. "
+            "دوباره امتحان کن."
+        )
+
+
+# =========================
+# Error Handler
+# =========================
+
+async def error_handler(
+    update: object,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    print(f"BOT ERROR: {context.error}")
+
+
+# =========================
+# Main
+# =========================
+
+def main():
+    if not BOT_TOKEN:
+        raise RuntimeError(
+            "BOT_TOKEN تنظیم نشده است."
+        )
+
+    init_db()
+
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .build()
+    )
+
+    app.add_handler(
+        CommandHandler("start", start)
+    )
+
+    app.add_handler(
+        CommandHandler("help", help_command)
+    )
+
+    app.add_handler(
+        CommandHandler("note", note_command)
+    )
+
+    app.add_handler(
+        CommandHandler("notes", notes_command)
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "delete_note",
+            delete_note_command,
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "reminder",
+            reminder_command,
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "reminders",
+            reminders_command,
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(button_handler)
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            chat_handler,
+        )
+    )
+
+    app.add_error_handler(error_handler)
+
+    print("Dariush AI Bot is running...")
+
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()

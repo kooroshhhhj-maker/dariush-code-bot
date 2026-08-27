@@ -1,0 +1,146 @@
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes
+from database import add_note, get_notes, delete_note
+
+
+def notes_menu():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📋 My Notes", callback_data="notes:list"),
+            InlineKeyboardButton("➕ New Note", callback_data="notes:new"),
+        ]
+    ])
+
+
+async def note_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.effective_user or not update.message:
+        return
+
+    user_id = update.effective_user.id
+    text = update.message.text or ""
+    content = text.partition(" ")[2].strip()
+
+    if not content:
+        await update.message.reply_text(
+            "📝 Send your note after /note.\n\n"
+            "Example:\n"
+            "/note Study Biology at 18:00"
+        )
+        return
+
+    note_id = add_note(user_id, content)
+
+    await update.message.reply_text(
+        f"📝 Note saved successfully.\n"
+        f"ID: {note_id}"
+    )
+
+
+async def notes_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.effective_user or not update.message:
+        return
+
+    await update.message.reply_text(
+        "📝 Notes",
+        reply_markup=notes_menu(),
+    )
+
+
+async def notes_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+
+    if not query or not update.effective_user:
+        return
+
+    await query.answer()
+
+    user_id = update.effective_user.id
+    action = query.data
+
+    if action == "notes:list":
+        notes = get_notes(user_id)
+
+        if not notes:
+            await query.edit_message_text(
+                "📝 You do not have any notes yet.",
+                reply_markup=notes_menu(),
+            )
+            return
+
+        lines = ["📝 Your Notes\n"]
+
+        for note in notes:
+            title = note["title"] or "Untitled"
+            lines.append(
+                f"#{note['id']} — {title}\n"
+                f"{note['content']}\n"
+            )
+
+        await query.edit_message_text(
+            "\n".join(lines),
+            reply_markup=notes_menu(),
+        )
+        return
+
+    if action == "notes:new":
+        context.user_data["notes_mode"] = "new"
+
+        await query.edit_message_text(
+            "➕ New Note\n\n"
+            "Send the note text now.\n\n"
+            "Example:\n"
+            "Study Biology at 18:00"
+        )
+        return
+
+
+async def handle_note_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.effective_user:
+        return False
+
+    if context.user_data.get("notes_mode") != "new":
+        return False
+
+    content = (update.message.text or "").strip()
+
+    if not content:
+        await update.message.reply_text("Please send a non-empty note.")
+        return True
+
+    note_id = add_note(
+        update.effective_user.id,
+        content,
+    )
+
+    context.user_data["notes_mode"] = None
+
+    await update.message.reply_text(
+        f"📝 Note saved successfully.\nID: {note_id}"
+    )
+
+    return True
+
+
+async def delete_note_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.effective_user or not update.message:
+        return
+
+    text = update.message.text or ""
+    argument = text.partition(" ")[2].strip()
+
+    if not argument.isdigit():
+        await update.message.reply_text(
+            "Usage:\n/delete_note 1"
+        )
+        return
+
+    deleted = delete_note(
+        update.effective_user.id,
+        int(argument),
+    )
+
+    await update.message.reply_text(
+        "🗑️ Note deleted."
+        if deleted
+        else "That note was not found."
+    )

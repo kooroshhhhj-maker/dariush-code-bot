@@ -1,0 +1,717 @@
+from telegram import Update, ReplyKeyboardMarkup, KeyboardButton
+from telegram.ext import (
+    ApplicationBuilder,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
+
+from config import BOT_TOKEN
+from ai_client import chat
+from image_generator import (
+    generate_image,
+    generate_pixel_art,
+)
+
+from database import (
+    init_db,
+    upsert_user,
+    save_message,
+    get_recent_messages,
+    get_notes,
+    get_pending_reminders,
+    get_daily_reminders,
+    complete_reminder,
+    advance_daily_reminder,
+    get_due_scheduled_notes,
+    mark_note_schedule_completed,
+)
+
+from handlers.notes import (
+    note_command,
+    notes_command,
+    delete_note_command,
+    notes_callback,
+    handle_note_text,
+)
+
+from handlers.reminders import (
+    reminder_command,
+    reminders_command,
+    reminders_callback,
+    handle_reminder_text,
+)
+
+
+# =========================
+# Main Keyboard
+# =========================
+
+def main_keyboard():
+    keyboard = [
+        [
+            KeyboardButton("🤖 Dariush AI"),
+        ],
+        [
+            KeyboardButton("📝 Notes"),
+            KeyboardButton("⏰ Reminders"),
+        ],
+        [
+            KeyboardButton("🎨 Create Image"),
+        ],
+        [
+            KeyboardButton("📰 Post Maker"),
+            KeyboardButton("🕹️ Pixel Art"),
+        ],
+        [
+            KeyboardButton("👤 User Panel"),
+        ],
+    ]
+
+    return ReplyKeyboardMarkup(
+        keyboard,
+        resize_keyboard=True,
+        is_persistent=True,
+    )
+
+
+# =========================
+# /start
+# =========================
+
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.effective_user or not update.message:
+        return
+
+    user = update.effective_user
+
+    upsert_user(
+        user.id,
+        username=user.username,
+        first_name=user.first_name,
+    )
+
+    await update.message.reply_text(
+        "Hello 👋\n\n"
+        "I'm Dariush, your personal assistant and smart secretary. 🤖\n\n"
+        "Use the buttons below or send me a message directly.",
+        reply_markup=main_keyboard(),
+    )
+
+
+# =========================
+# Help
+# =========================
+
+async def help_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.message:
+        return
+
+    await update.message.reply_text(
+        "🤖 Dariush Help\n\n"
+        "/start — Main menu\n"
+        "/help — Help\n"
+        "/note — Save a note\n"
+        "/notes — Show notes\n"
+        "/delete_note — Delete a note\n"
+        "/reminder — Create a reminder\n"
+        "/reminders — Show active reminders",
+        reply_markup=main_keyboard(),
+    )
+
+
+# =========================
+# User Panel
+# =========================
+
+async def user_panel(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.effective_user or not update.message:
+        return
+
+    user = update.effective_user
+    user_id = user.id
+
+    notes = get_notes(user_id)
+    reminders = get_pending_reminders(user_id)
+
+    username = (
+        f"@{user.username}"
+        if user.username
+        else "Not set"
+    )
+
+    await update.message.reply_text(
+        "👤 User Panel\n\n"
+        f"Name: {user.first_name or 'Unknown'}\n"
+        f"Username: {username}\n\n"
+        f"📝 Notes: {len(notes)}\n"
+        f"⏰ Active reminders: {len(reminders)}\n\n"
+        "⚙️ Settings and memory management "
+        "will be added later.",
+        reply_markup=main_keyboard(),
+    )
+
+
+# =========================
+# Image Generation
+# =========================
+
+async def image_prompt_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.message:
+        return
+
+    prompt = (update.message.text or "").strip()
+
+    if not prompt:
+        return
+
+    import asyncio
+
+    status = await update.message.reply_text(
+        "🎨 Creating image."
+    )
+
+    context.user_data["mode"] = None
+
+    stop_animation = asyncio.Event()
+
+    async def animate():
+        frames = [
+            "🎨 Creating image.",
+            "🎨 Creating image..",
+            "🎨 Creating image...",
+            "🧠 Processing prompt...",
+            "⚡ Rendering image...",
+            "🖼️ Generating pixels...",
+            "✨ Almost done...",
+        ]
+
+        index = 0
+
+        while not stop_animation.is_set():
+            try:
+                await status.edit_text(frames[index % len(frames)])
+            except Exception:
+                pass
+
+            index += 1
+
+            try:
+                await asyncio.wait_for(
+                    stop_animation.wait(),
+                    timeout=0.8,
+                )
+            except asyncio.TimeoutError:
+                pass
+
+    animation_task = asyncio.create_task(animate())
+
+    try:
+        image_path = await asyncio.to_thread(
+            generate_image,
+            prompt,
+        )
+
+        stop_animation.set()
+        await animation_task
+
+        try:
+            await status.delete()
+        except Exception:
+            pass
+
+        with open(image_path, "rb") as image_file:
+            await update.message.reply_photo(
+                photo=image_file,
+                caption="✨ Image created successfully.",
+            )
+
+    except Exception as error:
+        stop_animation.set()
+
+        try:
+            await animation_task
+        except Exception:
+            pass
+
+        print(f"IMAGE ERROR: {error}")
+
+        try:
+            await status.edit_text(
+                "❌ Image generation failed. Please try again."
+            )
+        except Exception:
+            await update.message.reply_text(
+                "❌ Image generation failed. Please try again."
+            )
+
+
+async def pixel_art_prompt_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.message:
+        return
+
+    prompt = (update.message.text or "").strip()
+
+    if not prompt:
+        return
+
+    import asyncio
+
+    status = await update.message.reply_text(
+        "🕹️ Creating Pixel Art."
+    )
+
+    context.user_data["mode"] = None
+
+    stop_animation = asyncio.Event()
+
+    async def animate():
+        frames = [
+            "🕹️ Creating Pixel Art.",
+            "🕹️ Creating Pixel Art..",
+            "🕹️ Creating Pixel Art...",
+            "🎨 Processing pixel style...",
+            "🧱 Building pixel composition...",
+            "⚡ Rendering pixels...",
+            "✨ Almost done...",
+        ]
+
+        index = 0
+
+        while not stop_animation.is_set():
+            try:
+                await status.edit_text(
+                    frames[index % len(frames)]
+                )
+            except Exception:
+                pass
+
+            index += 1
+
+            try:
+                await asyncio.wait_for(
+                    stop_animation.wait(),
+                    timeout=0.8,
+                )
+            except asyncio.TimeoutError:
+                pass
+
+    animation_task = asyncio.create_task(animate())
+
+    try:
+        image_path = await asyncio.to_thread(
+            generate_pixel_art,
+            prompt,
+        )
+
+        stop_animation.set()
+        await animation_task
+
+        try:
+            await status.delete()
+        except Exception:
+            pass
+
+        with open(image_path, "rb") as image_file:
+            try:
+                await update.message.reply_photo(
+                    photo=image_file,
+                    caption="🕹️ Pixel Art created successfully.",
+                    read_timeout=60,
+                    write_timeout=60,
+                    connect_timeout=30,
+                    pool_timeout=30,
+                )
+            except Exception as send_error:
+                print(
+                    f"PIXEL ART TELEGRAM SEND ERROR: "
+                    f"{type(send_error).__name__}: {send_error}"
+                )
+                await update.message.reply_text(
+                    "⚠️ تصویر ساخته شد، اما ارسال آن به تلگرام "
+                    "زمان زیادی برد. دوباره تلاش کنید."
+                )
+
+    except Exception as error:
+        stop_animation.set()
+
+        try:
+            await animation_task
+        except Exception:
+            pass
+
+        print(f"PIXEL ART ERROR: {type(error).__name__}: {error}")
+        import traceback
+        traceback.print_exc()
+
+        try:
+            await status.edit_text(
+                "❌ Pixel Art generation failed. Please try again."
+            )
+        except Exception:
+            await update.message.reply_text(
+                "❌ Pixel Art generation failed. Please try again."
+            )
+
+
+# =========================
+# Menu Actions
+# =========================
+
+
+async def menu_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.message:
+        return
+
+    text = update.message.text
+
+    if text == "🤖 Dariush AI":
+        await update.message.reply_text(
+            "🤖 Chat mode is active.\n\n"
+            "Send me a message."
+        )
+
+    elif text == "📝 Notes":
+        await notes_command(update, context)
+
+    elif text == "⏰ Reminders":
+        await reminders_command(update, context)
+
+    elif text == "🎨 Create Image":
+        context.user_data["mode"] = "image"
+
+        await update.message.reply_text(
+            "🎨 Image mode enabled.\n\n"
+            "Send me your image prompt."
+        )
+
+    elif text == "📰 Post Maker":
+        await update.message.reply_text(
+            "📰 Post Maker\n\n"
+            "Send me a forwarded post or message "
+            "and I will turn it into an English "
+            "Telegram post ready for @dariushcode."
+        )
+
+    elif text == "🕹️ Pixel Art":
+        context.user_data["mode"] = "pixel_art"
+
+        await update.message.reply_text(
+            "🕹️ Pixel Art mode enabled.\n\n"
+            "Send me your image prompt."
+        )
+
+    elif text == "👤 User Panel":
+        await user_panel(update, context)
+
+
+# =========================
+# Chat Handler
+# =========================
+
+async def chat_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.message or not update.effective_user:
+        return
+
+    user_id = update.effective_user.id
+    user_message = update.message.text
+
+    if not user_message:
+        return
+
+    # Notes/Reminders handlers own the message while their
+    # corresponding creation mode is active. Do not let the
+    # generic AI chat handler process the same message.
+    if context.user_data.get("notes_mode") in {
+        "new",
+        "schedule",
+        "time",
+    }:
+        return
+
+    if context.user_data.get("reminders_mode") in {
+        "text",
+        "time",
+    }:
+        return
+
+    menu_buttons = {
+        "🤖 Dariush AI",
+        "📝 Notes",
+        "⏰ Reminders",
+        "🎨 Create Image",
+        "📰 Post Maker",
+        "🕹️ Pixel Art",
+        "👤 User Panel",
+    }
+
+    if user_message in menu_buttons:
+        await menu_handler(update, context)
+        return
+
+    if context.user_data.get("mode") == "image":
+        await image_prompt_handler(update, context)
+        return
+
+    if context.user_data.get("mode") == "pixel_art":
+        await pixel_art_prompt_handler(update, context)
+        return
+
+    try:
+        upsert_user(
+            user_id,
+            username=update.effective_user.username,
+            first_name=update.effective_user.first_name,
+        )
+
+        save_message(
+            user_id,
+            "user",
+            user_message,
+        )
+
+        history = get_recent_messages(
+            user_id,
+            limit=20,
+        )
+
+        messages = [
+            {
+                "role": row["role"],
+                "content": row["content"],
+            }
+            for row in history
+        ]
+
+        await update.message.chat.send_action("typing")
+
+        answer = chat(
+            user_message,
+            messages=messages,
+        )
+
+        save_message(
+            user_id,
+            "assistant",
+            answer,
+        )
+
+        await update.message.reply_text(answer)
+
+    except Exception as error:
+        print(f"AI ERROR: {error}")
+
+        await update.message.reply_text(
+            "I couldn't process your request right now. "
+            "Please try again."
+        )
+
+
+
+
+# =========================
+# Daily Reminder Job
+# =========================
+
+async def daily_reminder_job(context: ContextTypes.DEFAULT_TYPE):
+    reminders = get_due_daily_reminders()
+
+    for reminder in reminders:
+        try:
+            await context.bot.send_message(
+                chat_id=reminder["user_id"],
+                text=(
+                    "🔔 Daily Reminder\n\n"
+                    f"📝 {reminder['text']}"
+                ),
+            )
+
+            advance_daily_reminder(
+                reminder["id"],
+                reminder["remind_at"],
+            )
+
+        except Exception as error:
+            print(
+                f"DAILY REMINDER ERROR: "
+                f"{type(error).__name__}: {error}"
+            )
+
+
+async def scheduled_note_job(
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    notes = get_due_scheduled_notes()
+
+    for note in notes:
+        try:
+            await context.bot.send_message(
+                chat_id=note["user_id"],
+                text=(
+                    "📝 Scheduled Note\n\n"
+                    f"{note['content']}"
+                ),
+            )
+
+            mark_note_schedule_completed(
+                note["id"]
+            )
+
+        except Exception as error:
+            print(
+                f"SCHEDULED NOTE ERROR: "
+                f"{type(error).__name__}: {error}"
+            )
+
+
+async def error_handler(
+    update: object,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    print(f"BOT ERROR: {context.error}")
+
+
+# =========================
+# Main
+# =========================
+
+def main():
+    if not BOT_TOKEN:
+        raise RuntimeError(
+            "BOT_TOKEN is not configured."
+        )
+
+    init_db()
+
+    app = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .build()
+    )
+
+    if app.job_queue is None:
+        raise RuntimeError(
+            "JobQueue is unavailable. Install python-telegram-bot[job-queue]."
+        )
+
+    app.job_queue.run_repeating(
+        daily_reminder_job,
+        interval=60,
+        first=10,
+        name="daily_reminders",
+    )
+
+    app.job_queue.run_repeating(
+        scheduled_note_job,
+        interval=60,
+        first=15,
+        name="scheduled_notes",
+    )
+
+    app.add_handler(
+        CommandHandler("start", start)
+    )
+
+    app.add_handler(
+        CommandHandler("help", help_command)
+    )
+
+    app.add_handler(
+        CommandHandler("note", note_command)
+    )
+
+    app.add_handler(
+        CommandHandler("notes", notes_command)
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "delete_note",
+            delete_note_command,
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            notes_callback,
+            pattern=r"^notes:",
+        )
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handle_note_text,
+        ),
+        group=0,
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "reminder",
+            reminder_command,
+        )
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "reminders",
+            reminders_command,
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            reminders_callback,
+            pattern=r"^reminders:",
+        )
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            handle_reminder_text,
+        ),
+        group=1,
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            chat_handler,
+        ),
+        group=2,
+    )
+
+    app.add_error_handler(error_handler)
+
+    print("Dariush AI Bot is running...")
+
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()

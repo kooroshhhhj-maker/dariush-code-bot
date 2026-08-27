@@ -1,0 +1,70 @@
+from telegram import Update
+from telegram.ext import ContextTypes
+
+from ai_client import chat
+
+
+async def handle_business_connection(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    connection = update.business_connection
+
+    if connection is None:
+        return
+
+    print(
+        "BUSINESS CONNECTION:",
+        connection.id,
+        "user_id=",
+        connection.user.id,
+        "can_reply=",
+        getattr(connection, "can_reply", None),
+    )
+
+
+async def handle_business_message(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    message = update.business_message
+
+    if message is None:
+        return
+
+    text = (message.text or "").strip()
+
+    if not text:
+        return
+
+    connection_id = message.business_connection_id
+
+    print(
+        "BUSINESS MESSAGE:",
+        "connection=",
+        connection_id,
+        "chat_id=",
+        message.chat_id,
+        "text=",
+        text,
+    )
+
+    try:
+        await message.chat.send_action(
+            "typing",
+            business_connection_id=connection_id,
+        )
+
+        answer = chat(text)
+
+        await message.reply_text(
+            answer,
+            business_connection_id=connection_id,
+        )
+
+    except Exception as error:
+        print(
+            "BUSINESS AI ERROR:",
+            type(error).__name__,
+            error,
+        )

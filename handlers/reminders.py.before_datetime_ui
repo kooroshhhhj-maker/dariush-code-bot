@@ -1,0 +1,283 @@
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes
+
+from database import (
+    add_reminder,
+    get_pending_reminders,
+    get_reminder,
+    set_reminder_daily,
+    delete_reminder,
+)
+
+
+def reminders_menu():
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "📋 My Reminders",
+                callback_data="reminders:list",
+            ),
+            InlineKeyboardButton(
+                "➕ New Reminder",
+                callback_data="reminders:new",
+            ),
+        ]
+    ])
+
+
+def reminder_actions(reminder_id, daily):
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton(
+                "🔕 Daily OFF" if daily else "🔔 Daily ON",
+                callback_data=f"reminders:daily:{reminder_id}",
+            ),
+            InlineKeyboardButton(
+                "🗑️ Delete",
+                callback_data=f"reminders:delete:{reminder_id}",
+            ),
+        ]
+    ])
+
+
+async def reminder_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.effective_user or not update.message:
+        return
+
+    text = update.message.text or ""
+    content = text.partition(" ")[2].strip()
+
+    if not content or "|" not in content:
+        await update.message.reply_text(
+            "⏰ Reminder format:\n\n"
+            "/reminder 2026-08-24T08:00 | Call Ali"
+        )
+        return
+
+    remind_at, reminder_text = content.split("|", 1)
+
+    remind_at = remind_at.strip()
+    reminder_text = reminder_text.strip()
+
+    if not reminder_text:
+        await update.message.reply_text(
+            "Reminder text cannot be empty."
+        )
+        return
+
+    reminder_id = add_reminder(
+        update.effective_user.id,
+        reminder_text,
+        remind_at,
+    )
+
+    await update.message.reply_text(
+        f"⏰ Reminder saved.\n"
+        f"ID: {reminder_id}\n"
+        f"Time: {remind_at}",
+        reply_markup=reminders_menu(),
+    )
+
+
+async def reminders_command(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.effective_user or not update.message:
+        return
+
+    await update.message.reply_text(
+        "⏰ Reminders",
+        reply_markup=reminders_menu(),
+    )
+
+
+async def reminders_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    query = update.callback_query
+
+    if not query or not update.effective_user:
+        return
+
+    await query.answer()
+
+    user_id = update.effective_user.id
+    action = query.data or ""
+
+    if action == "reminders:list":
+        reminders = get_pending_reminders(user_id)
+
+        if not reminders:
+            await query.edit_message_text(
+                "⏰ You do not have any active reminders.",
+                reply_markup=reminders_menu(),
+            )
+            return
+
+        await query.edit_message_text(
+            "⏰ Your active reminders:"
+        )
+
+        for reminder in reminders:
+            reminder_id = reminder["id"]
+
+            full_reminder = get_reminder(
+                user_id,
+                reminder_id,
+            )
+
+            if not full_reminder:
+                continue
+
+            daily = bool(full_reminder["daily"])
+
+            await query.message.reply_text(
+                f"#{reminder_id}\n"
+                f"🕐 {reminder['remind_at']}\n"
+                f"📝 {reminder['text']}",
+                reply_markup=reminder_actions(
+                    reminder_id,
+                    daily,
+                ),
+            )
+
+        return
+
+    if action == "reminders:new":
+        context.user_data["reminders_mode"] = "new"
+
+        await query.edit_message_text(
+            "➕ New Reminder\n\n"
+            "Send the reminder using this format:\n\n"
+            "2026-08-24T08:00 | Call Ali"
+        )
+        return
+
+    if action.startswith("reminders:daily:"):
+        try:
+            reminder_id = int(
+                action.split(":")[-1]
+            )
+        except ValueError:
+            await query.answer(
+                "Invalid reminder.",
+                show_alert=True,
+            )
+            return
+
+        reminder = get_reminder(
+            user_id,
+            reminder_id,
+        )
+
+        if not reminder:
+            await query.answer(
+                "Reminder not found.",
+                show_alert=True,
+            )
+            return
+
+        new_value = not bool(reminder["daily"])
+
+        set_reminder_daily(
+            user_id,
+            reminder_id,
+            new_value,
+        )
+
+        await query.edit_message_reply_markup(
+            reply_markup=reminder_actions(
+                reminder_id,
+                new_value,
+            )
+        )
+
+        await query.answer(
+            "Daily schedule enabled."
+            if new_value
+            else "Daily schedule disabled."
+        )
+        return
+
+    if action.startswith("reminders:delete:"):
+        try:
+            reminder_id = int(
+                action.split(":")[-1]
+            )
+        except ValueError:
+            await query.answer(
+                "Invalid reminder.",
+                show_alert=True,
+            )
+            return
+
+        deleted = delete_reminder(
+            user_id,
+            reminder_id,
+        )
+
+        if deleted:
+            await query.edit_message_text(
+                "🗑️ Reminder deleted."
+            )
+        else:
+            await query.answer(
+                "Reminder not found.",
+                show_alert=True,
+            )
+
+        return
+
+
+async def handle_reminder_text(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+):
+    if not update.message or not update.effective_user:
+        return False
+
+    if context.user_data.get("reminders_mode") != "new":
+        return False
+
+    content = (update.message.text or "").strip()
+
+    if not content or "|" not in content:
+        await update.message.reply_text(
+            "Invalid format.\n\n"
+            "Example:\n"
+            "2026-08-24T08:00 | Call Ali"
+        )
+        return True
+
+    remind_at, reminder_text = content.split("|", 1)
+
+    remind_at = remind_at.strip()
+    reminder_text = reminder_text.strip()
+
+    if not reminder_text:
+        await update.message.reply_text(
+            "Reminder text cannot be empty."
+        )
+        return True
+
+    reminder_id = add_reminder(
+        update.effective_user.id,
+        reminder_text,
+        remind_at,
+    )
+
+    context.user_data["reminders_mode"] = None
+
+    await update.message.reply_text(
+        f"⏰ Reminder saved.\n"
+        f"ID: {reminder_id}\n"
+        f"Time: {remind_at}",
+        reply_markup=reminders_menu(),
+    )
+
+    return True
